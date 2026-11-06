@@ -100,7 +100,7 @@ section.blk h2 span{font-family:var(--mono);text-transform:none;letter-spacing:0
 .f{min-width:0}
 .f label.l,.f .l{display:block;font-size:16px;line-height:1.25;margin-bottom:8px}
 .f .l code{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:4px}
-input.txt{font:inherit;width:100%;padding:9px 11px;border-radius:var(--r);border:1px solid var(--line);background:var(--bg);color:var(--fg);min-height:42px}
+.txt{font:inherit;width:100%;padding:9px 11px;border-radius:var(--r);border:1px solid var(--line);background:var(--bg);color:var(--fg);min-height:42px}
 input.txt.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
 input.txt.bad{border-color:var(--danger)}
 .seg{display:flex;flex-wrap:wrap;gap:6px}
@@ -109,6 +109,12 @@ input.txt.bad{border-color:var(--danger)}
 .seg button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
 .hint{font-size:14px;color:var(--muted);margin-top:6px;line-height:1.3}
 .err-t{font-size:14px;color:var(--danger);margin-top:4px}
+/* Notas */
+textarea.txt{min-height:150px;resize:vertical;line-height:1.35;display:block}
+.inkwrap{margin-top:18px}
+.ink{display:block;width:100%;aspect-ratio:1000/600;border:1px solid var(--line);border-radius:var(--r);touch-action:none;cursor:crosshair;
+  background:#fff repeating-linear-gradient(to bottom,transparent 0,transparent 39px,#e3e8f7 39px,#e3e8f7 40px)}
+.inktools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
 /* AV grid */
 .avgrid{overflow-x:auto}
 .avgrid table{border-collapse:collapse;min-width:300px}
@@ -255,7 +261,7 @@ async function tryUnlock(pin){
 }
 function lock(){
   if(!key)return;
-  key=null; store={records:[]}; flash=null; confirmDel=false; confirmExp=false; avFocus=null;
+  key=null; store={records:[]}; flash=null; confirmDel=false; confirmExp=false; confirmInk=false; avFocus=null;
   if(document.activeElement)document.activeElement.blur();
   pinUI={mode:"unlock",entry:""}; render();
 }
@@ -279,7 +285,7 @@ document.addEventListener("visibilitychange",()=>{
   else if(key&&Date.now()-lastAct>IDLE_MS)lock();
 });
 
-let view="list", cur=null, flash=null, avFocus=null, confirmDel=false, confirmExp=false;
+let view="list", cur=null, flash=null, avFocus=null, confirmDel=false, confirmExp=false, confirmInk=false, penSeen=false, inkRO=null;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
@@ -389,11 +395,11 @@ function msgHtml(){
 }
 function renderList(){
   const recs=[...store.records].sort((a,b)=>(b.updated||0)-(a.updated||0));
-  const d=dupCodes(), nExp=recs.filter(r=>r.exported).length;
+  const d=dupCodes(), nExp=recs.filter(r=>r.exported).length, nInk=recs.filter(r=>r.exported&&hasInk(r)).length;
   let h=msgHtml()+`<div class="listhead"><div><h1>Fichas registradas</h1>
     <p class="sub">${recs.length} ${recs.length===1?"ficha":"fichas"} en este dispositivo · ${COLS.length} variables por ficha</p></div>
     ${nExp&&!confirmExp?`<button class="ghost danger" id="delExp">Borrar fichas exportadas (${nExp})</button>`:""}</div>
-    ${nExp&&confirmExp?`<div class="confirm" style="margin-bottom:12px">¿Borrar de este dispositivo ${nExp===1?"la ficha que ya se ha exportado":`las ${nExp} fichas que ya se han exportado`}? Comprueba antes que tienes el Excel guardado. Las fichas sin exportar o editadas después de exportar se quedan.
+    ${nExp&&confirmExp?`<div class="confirm" style="margin-bottom:12px">¿Borrar de este dispositivo ${nExp===1?"la ficha que ya se ha exportado":`las ${nExp} fichas que ya se han exportado`}? Comprueba antes que tienes el Excel guardado. Las fichas sin exportar o editadas después de exportar se quedan.${nInk?` <b>${nInk===1?"Una de ellas tiene un dibujo":`${nInk} de ellas tienen dibujo`} en las notas: los dibujos no van en el Excel y se perderán.</b>`:""}
       <button class="danger solid" id="delExpYes">Borrar</button><button id="delExpNo">Cancelar</button></div>`:""}`;
   if(!recs.length){
     h+=`<div class="empty"><h1 style="font-size:18px">Aún no hay fichas</h1>
@@ -424,7 +430,7 @@ function fieldHtml(f,v){
     const d=dupCodes()[(val||"").trim().toUpperCase()]>1;
     return `<div class="f"><label class="l" for="f_${f.k}">${f.l}<code>${f.k}</code></label>
       <input class="txt mono${d?" bad":""}" id="f_${f.k}" data-k="${f.k}" autocomplete="off" autocapitalize="characters" value="${esc(val)}" placeholder="p. ej. 019ACV">
-      ${d?'<div class="err-t">Ya existe otra ficha con este código.</div>':'<div class="hint">Número + tipo de lesión, sin nombre del participante.</div>'}</div>`;
+      <div class="${d?"err-t":"hint"}" id="codeMsg">${d?"Ya existe otra ficha con este código.":"Número + tipo de lesión, sin nombre del participante."}</div></div>`;
   }
   if(f.t==="int"){
     return `<div class="f"><label class="l" for="f_${f.k}">${f.l}<code>${f.k}</code></label>
@@ -449,7 +455,7 @@ function renderForm(){
   const r=rec(); if(!r){view="list";return render()}
   const v=r.v;
   let h=msgHtml()+`<div class="formhead"><h1>${esc(v.codigo_paciente||"Ficha nueva")}</h1></div>
-   <nav class="jump">${SECTIONS.map(s=>`<a href="#s_${s.id}" class="${secFilled(s,v)===s.fields.length?"done":""}" data-j="${s.id}">${s.title.replace("Prueba 1 · ","").replace("Prueba 2 · ","")}</a>`).join("")}</nav>`;
+   <nav class="jump">${SECTIONS.map(s=>`<a href="#s_${s.id}" class="${secFilled(s,v)===s.fields.length?"done":""}" data-j="${s.id}">${s.title.replace("Prueba 1 · ","").replace("Prueba 2 · ","")}</a>`).join("")}<a href="#s_notas" class="${r.notas||hasInk(r)?"done":""}" data-j="notas">Notas</a></nav>`;
   for(const s of SECTIONS){
     h+=`<section class="blk" id="s_${s.id}"><h2>${s.title}<span>${secFilled(s,v)}/${s.fields.length}</span></h2>`;
     if(s.av){
@@ -464,8 +470,68 @@ function renderForm(){
     }
     h+=`</section>`;
   }
+  h+=`<section class="blk" id="s_notas"><h2>Notas<span></span></h2>
+    <label class="l" for="f_notas" style="display:block;margin-bottom:8px">Observaciones</label>
+    <textarea class="txt" id="f_notas" rows="5" placeholder="Escribe con el teclado o a mano con el Apple Pencil">${esc(r.notas)}</textarea>
+    <div class="hint">No escribas el nombre del participante ni otros datos que lo identifiquen. Las notas van en la hoja «Notas» del Excel.</div>
+    <div class="inkwrap"><div class="l">Dibujo a mano</div>
+    <canvas class="ink" id="ink" aria-label="Zona de dibujo"></canvas>
+    <div class="inktools">${confirmInk
+      ?`<div class="confirm">¿Borrar el dibujo entero?<button class="danger solid" id="inkClrYes">Borrar</button><button id="inkClrNo">Cancelar</button></div>`
+      :`<button id="inkUndo" ${hasInk(r)?"":"disabled"}>Deshacer trazo</button><button class="ghost danger" id="inkClr" ${hasInk(r)?"":"disabled"}>Borrar dibujo</button>`}</div>
+    <div class="hint">Dibuja con el Apple Pencil. Para desplazar la página con el dedo, tócala fuera del recuadro. El dibujo se queda solo en este dispositivo: no va en el Excel.</div></div></section>`;
   $("#app").innerHTML=h;
-  bindForm();
+  bindForm(); bindNotes();
+}
+const hasInk=r=>!!(r.dibujo&&r.dibujo.length);
+function touchRec(){const r=rec();if(!r)return;r.updated=Date.now();delete r.exported;persist()}
+function bindNotes(){
+  const r=rec(), ta=$("#f_notas");
+  ta.oninput=()=>{const t=ta.value;if(t.trim())r.notas=t;else delete r.notas;touchRec();
+    const a=document.querySelector('nav.jump a[data-j="notas"]');if(a)a.classList.toggle("done",!!r.notas||hasInk(r))};
+  const rerender=()=>{const y=window.scrollY;renderForm();window.scrollTo(0,y)};
+  const u=$("#inkUndo"); if(u)u.onclick=()=>{r.dibujo.pop();if(!r.dibujo.length)delete r.dibujo;touchRec();rerender()};
+  const c=$("#inkClr"); if(c)c.onclick=()=>{confirmInk=true;rerender()};
+  const cy=$("#inkClrYes"); if(cy)cy.onclick=()=>{delete r.dibujo;confirmInk=false;touchRec();rerender()};
+  const cn=$("#inkClrNo"); if(cn)cn.onclick=()=>{confirmInk=false;rerender()};
+  inkInit();
+}
+/* Lienzo de dibujo. Trazos en coordenadas lógicas 1000x600: r.dibujo=[[x,y,grosor*10, x,y,grosor*10, ...], ...].
+   Cuando se ha usado el Apple Pencil, el dedo no pinta (apoyar la palma no deja marca); sin lápiz, dibuja el dedo o el ratón. */
+const INK_W=1000, INK_H=600;
+function inkInit(){
+  const cv=$("#ink"); if(!cv)return;
+  const ctx=cv.getContext("2d"), r=rec();
+  const style=()=>{ctx.lineCap="round";ctx.lineJoin="round";ctx.strokeStyle=ctx.fillStyle="#333333"};
+  const dot=s=>{ctx.beginPath();ctx.arc(s[0],s[1],s[2]/20,0,7);ctx.fill()};
+  const seg=(s,i)=>{ctx.lineWidth=s[i+2]/10;ctx.beginPath();ctx.moveTo(s[i-3],s[i-2]);ctx.lineTo(s[i],s[i+1]);ctx.stroke()};
+  const redraw=()=>{ctx.clearRect(0,0,INK_W,INK_H);style();(r.dibujo||[]).forEach(s=>{dot(s);for(let i=3;i<s.length;i+=3)seg(s,i)})};
+  const fit=()=>{const d=window.devicePixelRatio||1,w=cv.clientWidth;if(!w)return;cv.width=Math.round(w*d);cv.height=Math.round(w*INK_H/INK_W*d);
+    ctx.setTransform(cv.width/INK_W,0,0,cv.height/INK_H,0,0);redraw()};
+  if(inkRO)inkRO.disconnect(); inkRO=new ResizeObserver(fit); inkRO.observe(cv);
+  let s=null, pid=null;
+  const pt=e=>{const b=cv.getBoundingClientRect();
+    return [Math.round((e.clientX-b.left)/b.width*INK_W),Math.round((e.clientY-b.top)/b.height*INK_H),
+      Math.round(10*(e.pointerType==="pen"?1+3*(e.pressure||.5):2.5))]};
+  cv.onpointerdown=e=>{
+    if(e.pointerType==="pen")penSeen=true;
+    if(e.pointerType==="touch"&&penSeen)return;
+    if(s)return;
+    e.preventDefault(); cv.setPointerCapture(e.pointerId); pid=e.pointerId;
+    s=pt(e); (r.dibujo=r.dibujo||[]).push(s); dot(s);
+  };
+  cv.onpointermove=e=>{
+    if(!s||e.pointerId!==pid)return;
+    for(const ev of (e.getCoalescedEvents?e.getCoalescedEvents():[e])){
+      const p=pt(ev),n=s.length;
+      if(Math.abs(p[0]-s[n-3])+Math.abs(p[1]-s[n-2])<2)continue;
+      s.push(...p); seg(s,s.length-3);
+    }
+  };
+  const end=e=>{if(!s||e.pointerId!==pid)return;s=null;pid=null;touchRec();
+    const u=$("#inkUndo"),c=$("#inkClr");if(u)u.disabled=false;if(c)c.disabled=false;
+    const a=document.querySelector('nav.jump a[data-j="notas"]');if(a)a.classList.add("done")};
+  cv.onpointerup=end; cv.onpointercancel=end;
 }
 function setVal(k,val,rerender){
   const r=rec(); if(!r)return;
@@ -496,7 +562,10 @@ function bindForm(){
       i.oninput=()=>{const t=i.value.trim();if(t===""){setVal(k,"",false);return}const n=parseInt(t,10);if(!isNaN(n))setVal(k,n,false)};
     }else if(k==="codigo_paciente"){
       i.oninput=()=>setVal(k,i.value.trim().toUpperCase(),false);
-      i.onchange=()=>{const y=window.scrollY;renderForm();window.scrollTo(0,y)};
+      // Sin redibujar la ficha: si no, se pierde el foco del campo que se acaba de tocar
+      i.onchange=()=>{const d=dupCodes()[(rec().v.codigo_paciente||"").toUpperCase()]>1,m=$("#codeMsg");
+        i.classList.toggle("bad",d); m.className=d?"err-t":"hint";
+        m.textContent=d?"Ya existe otra ficha con este código.":"Número + tipo de lesión, sin nombre del participante."};
     }else if(i.id.endsWith("_otro")){
       i.onchange=()=>setVal(k,i.value.trim(),true);
     }else{
@@ -555,6 +624,11 @@ async function doExport(){
   ws["!cols"]=COLS.map(k=>({wch:Math.max(10,k.length+2)}));
   ws["!autofilter"]={ref:ws["!ref"]};
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Datos");
+  // Hoja aparte para no alterar las 42 columnas de "Datos"
+  const wn=XLSX.utils.aoa_to_sheet([["codigo_paciente","notas","tiene_dibujo"],
+    ...recs.filter(r=>r.notas||hasInk(r)).map(r=>[r.v.codigo_paciente??null,r.notas??null,hasInk(r)?"si":"no"])]);
+  wn["!cols"]=[{wch:16},{wch:80},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,wn,"Notas");
   const buf=XLSX.write(wb,{bookType:"xlsx",type:"array"});
   const fecha=new Date().toISOString().slice(0,10);
   const filename=`VYSIUM_registros_${fecha}.xlsx`;
@@ -598,6 +672,8 @@ function importXlsx(e){
       const hi=rows.findIndex(r=>r&&r.includes("codigo_paciente"));
       if(hi<0)throw new Error("No encuentro la columna codigo_paciente.");
       const hdr=rows[hi]; let add=0,skip=0;
+      const notas={};
+      if(wb.Sheets["Notas"])XLSX.utils.sheet_to_json(wb.Sheets["Notas"],{defval:null}).forEach(x=>{if(x.codigo_paciente&&x.notas)notas[String(x.codigo_paciente).toUpperCase()]=String(x.notas)});
       const have=new Set(store.records.map(r=>(r.v.codigo_paciente||"").toUpperCase()));
       for(const row of rows.slice(hi+1)){
         if(!row||row.every(x=>x===null||x===""))continue;
@@ -606,7 +682,8 @@ function importXlsx(e){
         const c=(v.codigo_paciente||"").toUpperCase();
         if(c&&have.has(c)){skip++;continue}
         if(c)have.add(c);
-        store.records.push({id:uid(),v,created:Date.now(),updated:Date.now()});add++;
+        const nr={id:uid(),v,created:Date.now(),updated:Date.now()}; if(c&&notas[c])nr.notas=notas[c];
+        store.records.push(nr);add++;
       }
       persist();
       flash={c:"ok",t:`Importadas ${add} fichas${skip?`; ${skip} omitidas porque su código ya existía`:""}.`};
